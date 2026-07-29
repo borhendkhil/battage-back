@@ -4,7 +4,20 @@ const mysql = require('mysql2/promise');
 const path = require('path');
 
 const app = express();
-app.use(cors());
+const allowedOrigins = [
+  'https://battage-front.vercel.app',
+  'http://localhost:3002',
+  'http://localhost:5000'
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
 app.use(express.json());
 
 const dbConfig = {
