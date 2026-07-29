@@ -8,11 +8,11 @@ app.use(cors());
 app.use(express.json());
 
 const dbConfig = {
-  host: env.DB_HOST || 'localhost',
-  port: parseInt(env.DB_PORT) || 20291,
-  user: env.DB_USER || 'root',
-  password: env.DB_PASSWORD || 'avnadmin',
-  database: env.DB_NAME || 'defaultdb',
+  host: process.env.DB_HOST,
+  port: parseInt(process.env.DB_PORT, 10) || 20291,
+  user: process.env.DB_USER || 'avnadmin',
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME || 'defaultdb',
   ssl: {
     rejectUnauthorized: false
   },
