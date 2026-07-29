@@ -17,14 +17,18 @@ const mysql = require('mysql2/promise');
 
 async function main() {
   const connection = await mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: ''
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT) || 3306,
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || 'admin123',
+    database: process.env.DB_NAME || 'battage',
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined
   });
 
   try {
-    await connection.query(`CREATE DATABASE IF NOT EXISTS battage CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-    await connection.changeUser({ database: 'battage' });
+    const dbName = process.env.DB_NAME || 'battage';
+    await connection.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    await connection.changeUser({ database: dbName });
 
     // 0. Table utilisateurs
     await connection.execute(`
