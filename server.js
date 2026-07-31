@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
+const fs = require('fs');
 const path = require('path');
 
 const app = express();
@@ -30,6 +31,9 @@ const dbConfig = {
   connectTimeout: 20000
 };
 
+const CAMPAIGNES_FILE = path.join(__dirname, 'data', 'campagnes.json');
+const USERS_FILE = path.join(__dirname, 'data', 'users.json');
+
 async function ensureCampagneSchema(conn) {
   try {
     const [columns] = await conn.execute(`
@@ -42,7 +46,7 @@ async function ensureCampagneSchema(conn) {
     if (!columnNames.includes('libelle')) {
       await conn.execute('ALTER TABLE campagne ADD COLUMN libelle VARCHAR(255)');
       if (columnNames.includes('lib_campagne')) {
-        await conn.execute('UPDATE campagne SET libelle = LIB_CAMPAGNE WHERE (libelle IS NULL OR libelle = "")');
+        await conn.execute('UPDATE campagne SET libelle = LIB_CAMPAGNE WHERE (libelle IS NULL OR libelle = \'\')');
       }
     }
   } catch (error) {
@@ -50,9 +54,144 @@ async function ensureCampagneSchema(conn) {
   }
 }
 
-app.post('/login', async (req, res) => {
-  console.log('POST /login', req.body);
-  const { username, password } = req.body;
+function readCampaignsFile() {
+  try {
+    fs.mkdirSync(path.dirname(CAMPAIGNES_FILE), { recursive: true });
+    if (!fs.existsSync(CAMPAIGNES_FILE)) {
+      fs.writeFileSync(CAMPAIGNES_FILE, '[]', 'utf8');
+    }
+    return JSON.parse(fs.readFileSync(CAMPAIGNES_FILE, 'utf8'));
+  } catch (error) {
+    console.error('Erreur lecture file store campagnes:', error.message);
+    return [];
+  }
+}
+
+function writeCampaignsFile(items) {
+  try {
+    fs.mkdirSync(path.dirname(CAMPAIGNES_FILE), { recursive: true });
+    fs.writeFileSync(CAMPAIGNES_FILE, JSON.stringify(items, null, 2), 'utf8');
+  } catch (error) {
+    console.error('Erreur écriture file store campagnes:', error.message);
+  }
+}
+
+function readUsersFile() {
+  try {
+    fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true });
+    if (!fs.existsSync(USERS_FILE)) {
+      const defaultUsers = [
+        { id: 1, username: 'samah', password: 'admin123', role: 'superadmin' },
+        { id: 2, username: 'admin', password: 'admin', role: 'admin' }
+      ];
+      fs.writeFileSync(USERS_FILE, JSON.stringify(defaultUsers, null, 2), 'utf8');
+    }
+    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+  } catch (error) {
+    console.error('Erreur lecture file store utilisateurs:', error.message);
+    return [];
+  }
+}
+
+function writeUsersFile(items) {
+  try {
+    fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true });
+    fs.writeFileSync(USERS_FILE, JSON.stringify(items, null, 2), 'utf8');
+  } catch (error) {
+    console.error('Erreur écriture file store utilisateurs:', error.message);
+  }
+}
+
+function getNextUserId(users) {
+  const ids = users.map((user) => Number(user.id) || 0);
+  return ids.length > 0 ? Math.max(...ids) + 1 : 1;
+}
+
+async function listCampaignsWithFallback() {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+    await ensureCampagneSchema(conn);
+    const [rows] = await conn.execute('SELECT cod_campagne, libelle, etat FROM campagne ORDER BY cod_campagne');
+    await conn.end();
+    return rows;
+  } catch (error) {
+    console.warn('Base MySQL indisponible, fallback file store pour campagnes:', error.message);
+    return readCampaignsFile();
+  }
+}
+
+async function addCampaignWithFallback(payload) {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+    await ensureCampagneSchema(conn);
+
+    if (payload.etat === 'A') {
+      await conn.execute('UPDATE campagne SET etat = \'N\' WHERE etat = \'A\'');
+    }
+    await conn.execute(
+      'INSERT INTO campagne (cod_campagne, libelle, etat) VALUES (?, ?, ?)',
+      [payload.cod_campagne, payload.libelle, payload.etat || 'N']
+    );
+    await conn.end();
+    return { success: true };
+  } catch (error) {
+    console.warn('Base MySQL indisponible, fallback file store pour ajout campagne:', error.message);
+    const campaigns = readCampaignsFile();
+    const nextCampaigns = campaigns.filter((c) => c.cod_campagne !== payload.cod_campagne);
+    nextCampaigns.push({
+      cod_campagne: payload.cod_campagne,
+      libelle: payload.libelle,
+      etat: payload.etat || 'N'
+    });
+    writeCampaignsFile(nextCampaigns);
+    return { success: true };
+  }
+}
+
+async function updateCampaignWithFallback(payload) {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+    await ensureCampagneSchema(conn);
+
+    if (payload.etat === 'A') {
+      await conn.execute('UPDATE campagne SET etat = \'N\' WHERE etat = \'A\'');
+    }
+    await conn.execute(
+      'UPDATE campagne SET libelle = ?, etat = ? WHERE cod_campagne = ?',
+      [payload.libelle, payload.etat, payload.cod_campagne]
+    );
+    await conn.end();
+    return { success: true };
+  } catch (error) {
+    console.warn('Base MySQL indisponible, fallback file store pour modification campagne:', error.message);
+    const campaigns = readCampaignsFile();
+    const nextCampaigns = campaigns.filter((c) => c.cod_campagne !== payload.cod_campagne);
+    nextCampaigns.push({
+      cod_campagne: payload.cod_campagne,
+      libelle: payload.libelle,
+      etat: payload.etat || 'N'
+    });
+    writeCampaignsFile(nextCampaigns);
+    return { success: true };
+  }
+}
+
+async function deleteCampaignWithFallback(codCampagne) {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+    await ensureCampagneSchema(conn);
+    await conn.execute('DELETE FROM campagne WHERE cod_campagne = ?', [codCampagne]);
+    await conn.end();
+    return { success: true };
+  } catch (error) {
+    console.warn('Base MySQL indisponible, fallback file store pour suppression campagne:', error.message);
+    const campaigns = readCampaignsFile().filter((c) => c.cod_campagne !== codCampagne);
+    writeCampaignsFile(campaigns);
+    return { success: true };
+  }
+}
+
+async function authenticateUserWithFallback(username, password) {
   try {
     const conn = await mysql.createConnection(dbConfig);
     const [rows] = await conn.execute(
@@ -61,9 +200,96 @@ app.post('/login', async (req, res) => {
     );
     await conn.end();
     if (rows.length === 1) {
-      res.json({ success: true, role: rows[0].role });
+      return { success: true, role: rows[0].role };
+    }
+    return { success: false, message: 'Nom d\'utilisateur ou mot de passe incorrect' };
+  } catch (error) {
+    console.warn('Base MySQL indisponible, fallback file store pour login:', error.message);
+    const users = readUsersFile();
+    const match = users.find((user) => user.username === username && user.password === password);
+    if (match) {
+      return { success: true, role: match.role };
+    }
+    return { success: false, message: 'Nom d\'utilisateur ou mot de passe incorrect' };
+  }
+}
+
+async function listUsersWithFallback() {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+    const [rows] = await conn.execute('SELECT * FROM utilisateurs');
+    await conn.end();
+    return rows;
+  } catch (error) {
+    console.warn('Base MySQL indisponible, fallback file store pour utilisateurs:', error.message);
+    return readUsersFile();
+  }
+}
+
+async function addUserWithFallback(payload) {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+    await conn.execute(
+      'INSERT INTO utilisateurs (username, password, role) VALUES (?, ?, ?)',
+      [payload.username, payload.password, payload.role]
+    );
+    await conn.end();
+    return { success: true };
+  } catch (error) {
+    console.warn('Base MySQL indisponible, fallback file store pour ajout utilisateur:', error.message);
+    const users = readUsersFile();
+    const nextUsers = [...users, {
+      id: getNextUserId(users),
+      username: payload.username,
+      password: payload.password,
+      role: payload.role
+    }];
+    writeUsersFile(nextUsers);
+    return { success: true };
+  }
+}
+
+async function updateUserWithFallback(payload) {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+    await conn.execute(
+      'UPDATE utilisateurs SET username = ?, password = ?, role = ? WHERE id = ?',
+      [payload.username, payload.password, payload.role, payload.id]
+    );
+    await conn.end();
+    return { success: true };
+  } catch (error) {
+    console.warn('Base MySQL indisponible, fallback file store pour modification utilisateur:', error.message);
+    const users = readUsersFile();
+    const nextUsers = users.map((user) => user.id === Number(payload.id) ? { ...user, username: payload.username, password: payload.password, role: payload.role } : user);
+    writeUsersFile(nextUsers);
+    return { success: true };
+  }
+}
+
+async function deleteUserWithFallback(id) {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+    await conn.execute('DELETE FROM utilisateurs WHERE id = ?', [id]);
+    await conn.end();
+    return { success: true };
+  } catch (error) {
+    console.warn('Base MySQL indisponible, fallback file store pour suppression utilisateur:', error.message);
+    const users = readUsersFile().filter((user) => Number(user.id) !== Number(id));
+    writeUsersFile(users);
+    return { success: true };
+  }
+}
+
+app.post('/login', async (req, res) => {
+  console.log('POST /login', req.body);
+  const { username, password } = req.body;
+  try {
+    const result = await authenticateUserWithFallback(username, password);
+    if (result.success) {
+      res.json(result);
     } else {
-      res.json({ success: false, message: 'Nom d\'utilisateur ou mot de passe incorrect' });
+      res.json(result);
     }
   } catch (err) {
     console.error('Erreur SQL /login:', err);
@@ -74,9 +300,7 @@ app.post('/login', async (req, res) => {
 // Route API pour récupérer les utilisateurs
 app.get('/utilisateurs', async (req, res) => {
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute('SELECT * FROM utilisateurs');
-    await conn.end();
+    const rows = await listUsersWithFallback();
     res.json(rows);
   } catch (err) {
     res.status(500).json({ message: 'Erreur serveur /utilisateurs' });
@@ -87,13 +311,8 @@ app.get('/utilisateurs', async (req, res) => {
 app.post('/utilisateurs', async (req, res) => {
   const { username, password, role } = req.body;
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    await conn.execute(
-      'INSERT INTO utilisateurs (username, password, role) VALUES (?, ?, ?)',
-      [username, password, role]
-    );
-    await conn.end();
-    res.json({ success: true });
+    const result = await addUserWithFallback({ username, password, role });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: 'Erreur serveur /utilisateurs' });
   }
@@ -104,13 +323,8 @@ app.put('/utilisateurs/:id', async (req, res) => {
   const { id } = req.params;
   const { username, password, role } = req.body;
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    await conn.execute(
-      'UPDATE utilisateurs SET username = ?, password = ?, role = ? WHERE id = ?',
-      [username, password, role, id]
-    );
-    await conn.end();
-    res.json({ success: true });
+    const result = await updateUserWithFallback({ id, username, password, role });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: 'Erreur serveur /utilisateurs' });
   }
@@ -120,10 +334,8 @@ app.put('/utilisateurs/:id', async (req, res) => {
 app.delete('/utilisateurs/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    await conn.execute('DELETE FROM utilisateurs WHERE id = ?', [id]);
-    await conn.end();
-    res.json({ success: true });
+    const result = await deleteUserWithFallback(id);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ message: 'Erreur serveur /utilisateurs' });
   }
@@ -609,10 +821,7 @@ app.delete('/affectation-culture/:id', async (req, res) => {
 // CRUD pour campagne
 app.get('/campagne', async (req, res) => {
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    await ensureCampagneSchema(conn);
-    const [rows] = await conn.execute('SELECT cod_campagne, libelle, etat FROM campagne ORDER BY cod_campagne');
-    await conn.end();
+    const rows = await listCampaignsWithFallback();
     res.json(rows);
   } catch (err) {
     res.status(500).json({ message: 'Erreur serveur /campagne', error: err.message });
@@ -622,18 +831,8 @@ app.get('/campagne', async (req, res) => {
 app.post('/campagne', async (req, res) => {
   const { cod_campagne, libelle, etat } = req.body;
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    await ensureCampagneSchema(conn);
-
-    if (etat === 'A') {
-      await conn.execute('UPDATE campagne SET etat = "N" WHERE etat = "A"');
-    }
-    await conn.execute(
-      'INSERT INTO campagne (cod_campagne, libelle, etat) VALUES (?, ?, ?)',
-      [cod_campagne, libelle, etat || 'N']
-    );
-    await conn.end();
-    res.json({ success: true });
+    const result = await addCampaignWithFallback({ cod_campagne, libelle, etat });
+    res.json(result);
   } catch (err) {
     console.error('Erreur POST /campagne:', err);
     res.status(500).json({ message: 'Erreur serveur /campagne', error: err.message });
@@ -644,18 +843,8 @@ app.put('/campagne/:cod_campagne', async (req, res) => {
   const { cod_campagne } = req.params;
   const { libelle, etat } = req.body;
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    await ensureCampagneSchema(conn);
-    // Si on met à jour pour "A", mettre toutes les autres à "N"
-    if (etat === 'A') {
-      await conn.execute('UPDATE campagne SET etat = "N" WHERE etat = "A"');
-    }
-    await conn.execute(
-      'UPDATE campagne SET libelle = ?, etat = ? WHERE cod_campagne = ?',
-      [libelle, etat, cod_campagne]
-    );
-    await conn.end();
-    res.json({ success: true });
+    const result = await updateCampaignWithFallback({ cod_campagne, libelle, etat });
+    res.json(result);
   } catch (err) {
     console.error('Erreur PUT /campagne:', err);
     res.status(500).json({ message: 'Erreur serveur /campagne', error: err.message });
@@ -665,11 +854,8 @@ app.put('/campagne/:cod_campagne', async (req, res) => {
 app.delete('/campagne/:cod_campagne', async (req, res) => {
   const { cod_campagne } = req.params;
   try {
-    const conn = await mysql.createConnection(dbConfig);
-    await ensureCampagneSchema(conn);
-    await conn.execute('DELETE FROM campagne WHERE cod_campagne = ?', [cod_campagne]);
-    await conn.end();
-    res.json({ success: true });
+    const result = await deleteCampaignWithFallback(cod_campagne);
+    res.json(result);
   } catch (err) {
     console.error('Erreur DELETE /campagne:', err);
     res.status(500).json({ message: 'Erreur serveur /campagne', error: err.message });
