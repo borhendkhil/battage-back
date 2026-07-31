@@ -30,6 +30,26 @@ const dbConfig = {
   connectTimeout: 20000
 };
 
+async function ensureCampagneSchema(conn) {
+  try {
+    const [columns] = await conn.execute(`
+      SELECT COLUMN_NAME
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'campagne'
+    `);
+    const columnNames = columns.map((column) => column.COLUMN_NAME.toLowerCase());
+
+    if (!columnNames.includes('libelle')) {
+      await conn.execute('ALTER TABLE campagne ADD COLUMN libelle VARCHAR(255)');
+      if (columnNames.includes('lib_campagne')) {
+        await conn.execute('UPDATE campagne SET libelle = LIB_CAMPAGNE WHERE (libelle IS NULL OR libelle = "")');
+      }
+    }
+  } catch (error) {
+    console.error('Erreur lors de la vérification du schéma campagne:', error.message);
+  }
+}
+
 app.post('/login', async (req, res) => {
   console.log('POST /login', req.body);
   const { username, password } = req.body;
@@ -590,7 +610,8 @@ app.delete('/affectation-culture/:id', async (req, res) => {
 app.get('/campagne', async (req, res) => {
   try {
     const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute('SELECT * FROM campagne');
+    await ensureCampagneSchema(conn);
+    const [rows] = await conn.execute('SELECT cod_campagne, libelle, etat FROM campagne ORDER BY cod_campagne');
     await conn.end();
     res.json(rows);
   } catch (err) {
@@ -602,6 +623,7 @@ app.post('/campagne', async (req, res) => {
   const { cod_campagne, libelle, etat } = req.body;
   try {
     const conn = await mysql.createConnection(dbConfig);
+    await ensureCampagneSchema(conn);
 
     if (etat === 'A') {
       await conn.execute('UPDATE campagne SET etat = "N" WHERE etat = "A"');
@@ -613,6 +635,7 @@ app.post('/campagne', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err) {
+    console.error('Erreur POST /campagne:', err);
     res.status(500).json({ message: 'Erreur serveur /campagne', error: err.message });
   }
 });
@@ -622,6 +645,7 @@ app.put('/campagne/:cod_campagne', async (req, res) => {
   const { libelle, etat } = req.body;
   try {
     const conn = await mysql.createConnection(dbConfig);
+    await ensureCampagneSchema(conn);
     // Si on met à jour pour "A", mettre toutes les autres à "N"
     if (etat === 'A') {
       await conn.execute('UPDATE campagne SET etat = "N" WHERE etat = "A"');
@@ -633,6 +657,7 @@ app.put('/campagne/:cod_campagne', async (req, res) => {
     await conn.end();
     res.json({ success: true });
   } catch (err) {
+    console.error('Erreur PUT /campagne:', err);
     res.status(500).json({ message: 'Erreur serveur /campagne', error: err.message });
   }
 });
@@ -641,10 +666,12 @@ app.delete('/campagne/:cod_campagne', async (req, res) => {
   const { cod_campagne } = req.params;
   try {
     const conn = await mysql.createConnection(dbConfig);
+    await ensureCampagneSchema(conn);
     await conn.execute('DELETE FROM campagne WHERE cod_campagne = ?', [cod_campagne]);
     await conn.end();
     res.json({ success: true });
   } catch (err) {
+    console.error('Erreur DELETE /campagne:', err);
     res.status(500).json({ message: 'Erreur serveur /campagne', error: err.message });
   }
 });
