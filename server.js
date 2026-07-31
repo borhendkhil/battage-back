@@ -604,7 +604,7 @@ app.post('/campagne', async (req, res) => {
     const conn = await mysql.createConnection(dbConfig);
 
     if (etat === 'A') {
-      await conn.execute('UPDATE campagne SET etat = "N" WHERE etat = "A"');
+      await conn.execute('UPDATE campagne SET etat = \'N\' WHERE etat = \'A\'');
     }
     await conn.execute(
       'INSERT INTO campagne (cod_campagne, libelle, etat) VALUES (?, ?, ?)',
@@ -624,7 +624,7 @@ app.put('/campagne/:cod_campagne', async (req, res) => {
     const conn = await mysql.createConnection(dbConfig);
     // Si on met à jour pour "A", mettre toutes les autres à "N"
     if (etat === 'A') {
-      await conn.execute('UPDATE campagne SET etat = "N" WHERE etat = "A"');
+      await conn.execute('UPDATE campagne SET etat = \'N\' WHERE etat = \'A\'');
     }
     await conn.execute(
       'UPDATE campagne SET libelle = ?, etat = ? WHERE cod_campagne = ?',
