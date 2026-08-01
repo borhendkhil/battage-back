@@ -491,6 +491,18 @@ app.delete('/production/:id', async (req, res) => {
 });
 
 // CRUD pour affectation_culture
+async function getOrCreateDefaultProduction(conn) {
+  const [rows] = await conn.execute(
+    'SELECT id FROM production WHERE libelle = ? LIMIT 1',
+    ['Défaut']
+  );
+  if (rows.length) return rows[0].id;
+  const [result] = await conn.execute(
+    'INSERT INTO production (libelle, unite) VALUES (?, ?)',
+    ['Défaut', '']
+  );
+  return result.insertId;
+}
 app.get('/affectation-culture', async (req, res) => {
   try {
     const conn = await mysql.createConnection(dbConfig);
@@ -540,11 +552,12 @@ app.post('/affectation-culture', async (req, res) => {
     // Si surfaceToAffect < surfaceParcelle - totalAffectee, on autorise aussi
 
     // 4. Insertion
+    const productionId = production_id || await getOrCreateDefaultProduction(conn);
     await conn.execute(
       `INSERT INTO affectation_culture
-        (COD_SOC, cod_par, cod_campagne, categorie_id, type_culture_id, nature_culture_id, surface_affectee)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [COD_SOC, cod_par, cod_campagne, categorie_id, type_culture_id, nature_culture_id, surface_affectee]
+        (COD_SOC, cod_par, cod_campagne, categorie_id, type_culture_id, nature_culture_id, production_id, surface_affectee)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [COD_SOC, cod_par, cod_campagne, categorie_id, type_culture_id, nature_culture_id, productionId, surface_affectee]
     );
     await conn.end();
     res.json({ success: true });
@@ -557,15 +570,16 @@ app.put('/affectation-culture/:id', async (req, res) => {
   const { id } = req.params;
   const {
     COD_SOC, cod_par, cod_campagne,
-    categorie_id, type_culture_id, nature_culture_id, surface_affectee
+    categorie_id, type_culture_id, nature_culture_id, surface_affectee, production_id
   } = req.body;
   try {
     const conn = await mysql.createConnection(dbConfig);
+    const productionId = production_id || await getOrCreateDefaultProduction(conn);
     await conn.execute(
       `UPDATE affectation_culture SET
-        COD_SOC = ?, cod_par = ?, cod_campagne = ?, categorie_id = ?, type_culture_id = ?, nature_culture_id = ?, surface_affectee = ?
+        COD_SOC = ?, cod_par = ?, cod_campagne = ?, categorie_id = ?, type_culture_id = ?, nature_culture_id = ?, production_id = ?, surface_affectee = ?
         WHERE id = ?`,
-      [COD_SOC, cod_par, cod_campagne, categorie_id, type_culture_id, nature_culture_id, surface_affectee, id]
+      [COD_SOC, cod_par, cod_campagne, categorie_id, type_culture_id, nature_culture_id, productionId, surface_affectee, id]
     );
     await conn.end();
     res.json({ success: true });
