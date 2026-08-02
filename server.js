@@ -839,6 +839,64 @@ app.get('/rapport-journalier', async (req, res) => {
   }
 });
 
+// Statistiques du tableau de bord admin
+app.get('/dashboard-stats', async (req, res) => {
+  try {
+    const conn = await mysql.createConnection(dbConfig);
+
+    // 1. Superficie par culture (nature_culture)
+    const [superficieParCulture] = await conn.execute(`
+      SELECT nc.libelle AS culture, COALESCE(SUM(ac.surface_affectee), 0) AS superficie
+      FROM nature_culture nc
+      LEFT JOIN affectation_culture ac ON ac.nature_culture_id = nc.id
+      GROUP BY nc.id, nc.libelle
+      ORDER BY superficie DESC
+    `);
+
+    // 2. Superficie par agrocombinat (surface totale des parcelles)
+    const [superficieParAgro] = await conn.execute(`
+      SELECT a.COD_SOC, a.LIB_SOC, COALESCE(SUM(p.surface), 0) AS superficie
+      FROM agro_combinats a
+      LEFT JOIN parcelle p ON p.COD_SOC = a.COD_SOC
+      GROUP BY a.COD_SOC, a.LIB_SOC
+      ORDER BY superficie DESC
+    `);
+
+    // 3. Superficie non cultivée par agrocombinat
+    const [superficieNonCultivee] = await conn.execute(`
+      SELECT
+        a.COD_SOC,
+        a.LIB_SOC,
+        COALESCE(SUM(p.surface), 0) AS superficie_totale,
+        COALESCE((SELECT SUM(surface_affectee) FROM affectation_culture ac WHERE ac.COD_SOC = a.COD_SOC), 0) AS superficie_cultivee
+      FROM agro_combinats a
+      LEFT JOIN parcelle p ON p.COD_SOC = a.COD_SOC
+      GROUP BY a.COD_SOC, a.LIB_SOC
+      ORDER BY a.COD_SOC
+    `);
+
+    // 4. Superficie par culture et par agrocombinat
+    const [superficieCultureAgro] = await conn.execute(`
+      SELECT a.LIB_SOC AS agrocombinat, nc.libelle AS culture, COALESCE(SUM(ac.surface_affectee), 0) AS superficie
+      FROM affectation_culture ac
+      JOIN agro_combinats a ON a.COD_SOC = ac.COD_SOC
+      JOIN nature_culture nc ON nc.id = ac.nature_culture_id
+      GROUP BY a.COD_SOC, a.LIB_SOC, nc.id, nc.libelle
+      ORDER BY a.LIB_SOC, superficie DESC
+    `);
+
+    await conn.end();
+    res.json({
+      superficieParCulture,
+      superficieParAgro,
+      superficieNonCultivee,
+      superficieCultureAgro
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Erreur serveur /dashboard-stats', error: err.message });
+  }
+});
+
 const frontendDist = path.join(__dirname, '../frontend/build');
 app.use(express.static(frontendDist));
 
